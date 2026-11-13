@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IMF // 2026 全球戰略核武庫存監控系統</title>
+    <!-- D3.js 與 TopoJSON -->
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script src="https://unpkg.com/topojson-client@3"></script>
+    <style>
+        :root {
+            --bg-dark: #0a0806;
+            --panel-bg: rgba(18, 14, 11, 0.85);
+            --border-color: #4a3424;
+            --accent-amber: #ff8c1a;
+            --accent-dim: #995310;
+            --text-glow: 0 0 8px rgba(255, 140, 26, 0.6);
+            --font-tech: 'Courier New', 'Consolas', 'Segoe UI', monospace;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            user-select: none;
+        }
+
+        body {
+            background-color: var(--bg-dark);
+            color: #d6cbbf;
+            font-family: var(--font-tech);
+            overflow: hidden;
+            height: 100vh;
+            width: 100vw;
+            position: relative;
+        }
+
+        /* 科技感背景網格與掃描線效果 */
+        .hud-grid {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-image: 
+                linear-gradient(rgba(255, 140, 26, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255, 140, 26, 0.03) 1px, transparent 1px);
+            background-size: 30px 30px;
+            pointer-events: none;
+            z-index: 1;
+        }
+
+        .scanline {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(to bottom, transparent 50%, rgba(0, 0, 0, 0.4) 51%);
+            background-size: 100% 4px;
+            pointer-events: none;
+            z-index: 2;
+            opacity: 0.6;
+        }
+
+        /* 頂部 HUD 標頭列 */
+        header {
+            position: absolute;
+            top: 15px;
+            left: 20px;
+            right: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 10px;
+            z-index: 10;
+            text-shadow: var(--text-glow);
+        }
+
+        .title-group h1 {
+            font-size: 1.25rem;
+            letter-spacing: 2.5px;
+            color: #fff;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .badge-warning {
+            background: #47170a;
+            color: #ff5533;
+            font-size: 0.7rem;
+            padding: 2px 6px;
+            border: 1px solid #ff5533;
+            border-radius: 2px;
+            letter-spacing: 1px;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+
+        .sys-meta {
+            font-size: 0.75rem;
+            color: var(--accent-dim);
+            letter-spacing: 1.5px;
+            text-align: right;
+            line-height: 1.4;
+        }
+
+        /* SVG 地圖畫布 */
+        #map-container {
+            width: 100vw;
+            height: 100vh;
+            display: block;
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 3;
+        }
+
+        .country {
+            stroke: #2e2017;
+            stroke-width: 0.6px;
+            transition: all 0.2s ease;
+            cursor: crosshair;
+        }
+
+        .country:hover {
+            stroke: #ff9d3b;
+            stroke-width: 1.5px;
+            filter: drop-shadow(0 0 6px rgba(255, 140, 26, 0.8));
+        }
+
+        /* 右下角圖例面板 (Legend) */
+        .legend-card {
+            position: absolute;
+            bottom: 25px;
+            right: 25px;
+            background: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            padding: 16px 20px;
+            z-index: 10;
+            backdrop-filter: blur(8px);
+            box-shadow: inset 0 0 15px rgba(0, 0, 0, 0.8), 0 0 12px rgba(74, 52, 36, 0.5);
+            font-size: 0.75rem;
+            letter-spacing: 1px;
+            min-width: 250px;
+        }
+
+        .legend-card::before {
+            content: "SEC-LEVEL // 識別圖例";
+            display: block;
+            font-size: 0.65rem;
+            color: var(--accent-amber);
+            margin-bottom: 12px;
+            border-left: 2px solid var(--accent-amber);
+            padding-left: 6px;
+            text-transform: uppercase;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            margin-bottom: 7px;
+            font-size: 0.72rem;
+            color: #d1c5ba;
+        }
+
+        .legend-box {
+            width: 20px;
+            height: 12px;
+            margin-right: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            flex-shrink: 0;
+        }
+
+        /* 科技彈出 HUD Tooltip */
+        #tooltip {
+            position: absolute;
+            display: none;
+            pointer-events: none;
+            background: rgba(14, 10, 8, 0.92);
+            border: 1px solid var(--accent-amber);
+            padding: 12px 16px;
+            font-size: 0.8rem;
+            z-index: 20;
+            box-shadow: 0 0 15px rgba(255, 140, 26, 0.35);
+            backdrop-filter: blur(4px);
+            transform: translate(-50%, -120%);
+        }
+
+        #tooltip::after {
+            content: '';
+            position: absolute;
+            bottom: -6px;
+            left: 50%;
+            transform: translateX(-50%);
+            border-width: 6px 6px 0 6px;
+            border-style: solid;
+            border-color: var(--accent-amber) transparent transparent transparent;
+        }
+
+        .tt-header {
+            font-weight: bold;
+            font-size: 0.95rem;
+            color: #ffffff;
+            border-bottom: 1px dashed var(--accent-dim);
+            padding-bottom: 4px;
+            margin-bottom: 6px;
+            display: flex;
+            justify-content: space-between;
+            gap: 20px;
+        }
+
+        .tt-code {
+            color: var(--accent-amber);
+            font-size: 0.7rem;
+            font-family: var(--font-tech);
+        }
+
+        .tt-stat {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.8rem;
+            color: #b5a494;
+        }
+
+        .tt-val {
+            font-size: 1.1rem;
+            color: var(--accent-amber);
+            font-weight: bold;
+            margin-left: 10px;
+        }
+
+        /* 視角縮放控制鈕 */
+        .controls {
+            position: absolute;
+            bottom: 25px;
+            left: 25px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            z-index: 10;
+        }
+
+        .btn-tech {
+            background: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            color: #ff8c1a;
+            width: 34px;
+            height: 34px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            cursor: pointer;
+            font-family: var(--font-tech);
+            font-size: 1.1rem;
+            transition: all 0.2s;
+        }
+
+        .btn-tech:hover {
+            border-color: var(--accent-amber);
+            background: rgba(255, 140, 26, 0.2);
+            box-shadow: 0 0 10px rgba(255, 140, 26, 0.4);
+        }
+
+        /* 載入中動畫 */
+        #loader {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: var(--accent-amber);
+            font-size: 1rem;
+            letter-spacing: 3px;
+            z-index: 15;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .loader-ring {
+            width: 40px;
+            height: 40px;
+            border: 2px solid transparent;
+            border-top: 2px solid var(--accent-amber);
+            border-right: 2px solid var(--accent-amber);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="hud-grid"></div>
+    <div class="scanline"></div>
+
+    <header>
+        <div class="title-group">
+            <h1>IMF STRAT-DEF // 全球核武庫存全景圖</h1>
+            <span class="badge-warning">DEFCON-2</span>
+        </div>
+        <div class="sys-meta">
+            <div>TARGET YEAR: 2026 // EST-DATA</div>
+            <div id="live-timer">UTC 00:00:00</div>
+        </div>
+    </header>
+
+    <div id="loader">
+        <div class="loader-ring"></div>
+        <div>INITIALIZING SATELLITE TELEMETRY...</div>
+    </div>
+
+    <!-- 地圖容器 -->
+    <svg id="map-container"></svg>
+
+    <!-- 浮動 Tooltip -->
+    <div id="tooltip"></div>
+
+    <!-- 左下角控制鈕 -->
+    <div class="controls">
+        <button class="btn-tech" id="zoom-in" title="放大">+</button>
+        <button class="btn-tech" id="zoom-out" title="縮小">−</button>
+        <button class="btn-tech" id="zoom-reset" title="重置">⟲</button>
+    </div>
+
+    <!-- 右下角圖例 -->
+    <div class="legend-card" id="legend"></div>
+
+    <script>
+        // 2026 全球各國核彈數量預估數據（依據 SIPRI / FAS 最新趨勢模型）
+        const nuclearData = {
+            643: { name: "俄羅斯", en: "RUSSIA", nukes: 5580 },
+            840: { name: "美國", en: "UNITED STATES", nukes: 5044 },
+            156: { name: "中國", en: "CHINA", nukes: 550 },
+            250: { name: "法國", en: "FRANCE", nukes: 290 },
+            826: { name: "英國", en: "UNITED KINGDOM", nukes: 225 },
+            356: { name: "印度", en: "INDIA", nukes: 172 },
+            586: { name: "巴基斯坦", en: "PAKISTAN", nukes: 170 },
+            376: { name: "以色列", en: "ISRAEL", nukes: 90 },
+            408: { name: "北韓", en: "NORTH KOREA", nukes: 50 }
+        };
+
+        // 中文常用國名快顯對照表（未持核國家）
+        const countryNames = {
+            158: "台灣", 392: "日本", 410: "南韓", 276: "德國", 804: "烏克蘭",
+            124: "加拿大", 036: "澳洲", 076: "巴西", 710: "南非", 380: "義大利",
+            724: "西班牙", 792: "土耳其", 682: "沙烏地阿拉伯", 364: "伊朗"
+        };
+
+        // 棕色階級定義（要求：越深代表數量越多；無核國家為科技底色微棕）
+        const colorRanges = [
+            { min: 2000, max: Infinity, color: "#2b0d04", label: "2,000 枚以上 (極深棕)" },
+            { min: 500,  max: 1999,     color: "#5e210b", label: "500 - 1,999 枚 (深濃棕)" },
+            { min: 100,  max: 499,      color: "#914418", label: "100 - 499 枚 (赤褐色)" },
+            { min: 1,    max: 99,       color: "#c97334", label: "1 - 99 枚 (淺赭棕)" },
+            { min: 0,    max: 0,        color: "#181410", label: "無部署核武 (微暗棕)" }
+        ];
+
+        function getFillColor(nukes) {
+            if (!nukes || nukes === 0) return colorRanges[4].color;
+            for (let r of colorRanges) {
+                if (nukes >= r.min && nukes <= r.max) return r.color;
+            }
+            return colorRanges[4].color;
+        }
+
+        // 初始化圖例面板
+        const legendContainer = document.getElementById("legend");
+        colorRanges.forEach(item => {
+            const row = document.createElement("div");
+            row.className = "legend-item";
+            row.innerHTML = `
+                <div class="legend-box" style="background: ${item.color}; ${item.min > 0 ? 'border-color: #ff8c1a;' : ''}"></div>
+                <span>${item.label}</span>
+            `;
+            legendContainer.appendChild(row);
+        });
+
+        // 動態即時時間
+        function updateTimer() {
+            const now = new Date();
+            document.getElementById('live-timer').innerText = 
+                `UTC ${now.toISOString().replace('T', ' // ').substring(0, 22)}`;
+        }
+        setInterval(updateTimer, 50);
+        updateTimer();
+
+        // 繪製地圖
+        const width = window.innerWidth;
+        const height = window.innerHeight;
+        const svg = d3.select("#map-container")
+            .attr("width", width)
+            .attr("height", height);
+
+        const g = svg.append("g");
+
+        // 採用具電影特務大螢幕感的 Natural Earth 投影
+        const projection = d3.geoNaturalEarth1()
+            .scale(width / 5.8)
+            .translate([width / 2.05, height / 1.85]);
+
+        const path = d3.geoPath().projection(projection);
+
+        // 支援平移與縮放 (Zoom & Pan)
+        const zoom = d3.zoom()
+            .scaleExtent([1, 8])
+            .on("zoom", (event) => {
+                g.attr("transform", event.transform);
+            });
+
+        svg.call(zoom);
+
+        // 控制鈕綁定
+        d3.select("#zoom-in").on("click", () => svg.transition().duration(400).call(zoom.scaleBy, 1.4));
+        d3.select("#zoom-out").on("click", () => svg.transition().duration(400).call(zoom.scaleBy, 0.7));
+        d3.select("#zoom-reset").on("click", () => svg.transition().duration(400).call(zoom.transform, d3.zoomIdentity));
+
+        const tooltip = d3.select("#tooltip");
+
+        // 載入世界地圖向量拓撲資料
+        d3.json("https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json").then(world => {
+            document.getElementById("loader").style.display = "none";
+            const countries = topojson.feature(world, world.objects.countries).features;
+
+            g.selectAll("path")
+                .data(countries)
+                .enter()
+                .append("path")
+                .attr("class", "country")
+                .attr("d", path)
+                .attr("fill", d => {
+                    const id = parseInt(d.id, 10);
+                    const country = nuclearData[id];
+                    return getFillColor(country ? country.nukes : 0);
+                })
+                .on("mousemove", function(event, d) {
+                    const id = parseInt(d.id, 10);
+                    const nukeInfo = nuclearData[id];
+                    const name = nukeInfo ? nukeInfo.name : (countryNames[id] || `代碼 #${id}`);
+                    const nukes = nukeInfo ? nukeInfo.nukes.toLocaleString() : "0";
+                    const statusTag = nukeInfo ? "WARHEAD DEPLOYED" : "NON-NUCLEAR";
+
+                    tooltip.style("display", "block")
+                        .style("left", (event.pageX) + "px")
+                        .style("top", (event.pageY) + "px")
+                        .html(`
+                            <div class="tt-header">
+                                <span>${name}</span>
+                                <span class="tt-code">${statusTag}</span>
+                            </div>
+                            <div class="tt-stat">
+                                <span>估算核彈持有量:</span>
+                                <span class="tt-val">${nukes} 枚</span>
+                            </div>
+                        `);
+                })
+                .on("mouseout", function() {
+                    tooltip.style("display", "none");
+                });
+        });
+
+        // 視窗尺寸自動適應
+        window.addEventListener('resize', () => {
+            const w = window.innerWidth;
+            const h = window.innerHeight;
+            svg.attr("width", w).attr("height", h);
+            projection.scale(w / 5.8).translate([w / 2.05, h / 1.85]);
+            g.selectAll("path").attr("d", path);
+        });
+    </script>
+</body>
+</html>
